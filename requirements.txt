@@ -1,0 +1,8 @@
+# Agent B: Streaming Discovery Agent. Independent of Agent A (Watch Concierge): no shared packages.
+openai-agents>=0.26,<0.27      # agent runtime (ADR-003: Groq via OpenAIChatCompletionsModel)
+a2a-sdk[http-server]==1.2.0    # same pin as Agent A: both ends of the A2A link on one SDK version
+uvicorn>=0.30
+httpx>=0.28
+python-dotenv>=1.0
+# tests: python -m pytest tests -q
+pytest>=8
