@@ -32,7 +32,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from discovery_agent import config, discover, operations
+from discovery_agent import config, discover, operations, skills
 from discovery_agent.contract import (CONTRACT, OPERATIONS, ContractError, envelope, error, parse_request,
                                       validate_result)
 
@@ -142,8 +142,13 @@ def build_app(url: str) -> Starlette:
 def main():
     import uvicorn
     host = config.check_host(config.HOST)
+    try:
+        loaded = skills.registry().metadata()          # fail closed: an invalid skill file stops the start
+    except skills.SkillError as e:
+        raise SystemExit(f"skill configuration error: {e}") from None
     url = f"http://{host}:{config.PORT}"
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     print(f"{config.AGENT_NAME} (A2A, {CONTRACT}) on {url}  card: {url}/.well-known/agent-card.json  "
           "(no authentication yet: this PC only)", flush=True)
+    print("skills: " + ", ".join(f"{m.name} {m.version} {list(m.tools)}" for m in loaded), flush=True)
     uvicorn.run(build_app(url), host=host, port=config.PORT, log_level="warning")

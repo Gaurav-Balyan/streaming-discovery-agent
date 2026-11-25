@@ -17,12 +17,24 @@ imports the other's code.
 
 Design records (contract, trust model, ADRs) live in the "Streamwise Concierge" project.
 
-## Status: Phase 2 (all four operations)
+## Status: Phase 3 (skills)
 
 | Operation | Status |
 |---|---|
 | `lookup_title`, `lookup_titles`, `search_youtube` | Agent B's code calls its own catalog-mcp (stdio subprocess, ADR-006); no model. |
-| `discover` | Groq model via the OpenAI Agents SDK chooses the searches (≤4 turns, 40 s). The `result` data is built by code from the tool outputs only; the model's prose is a separate, untrusted `answer` artifact. |
+| `discover` | Groq model via the OpenAI Agents SDK chooses the searches (40 s). The `result` data is built by code from the tool outputs only; the model's prose is a separate, untrusted `answer` artifact. |
+
+### Skills (`discovery_agent/skills/*.md`)
+
+| Skill | Tools | Turns |
+|---|---|---|
+| `title-discovery` | `search_title` | 4 |
+| `youtube-discovery` | `search_youtube` | 3 |
+
+`discover` picks skills by code from each skill's `keywords` (no model call): one skill's cue → that
+skill; several → all of them in one run; no cue → all. Only the selected skills' instructions are loaded
+(the registry reads headers at startup, bodies on first use), and only their tools are offered. An
+invalid skill file stops the server from starting.
 
 Every request's params and every result are validated against `schemas/discovery-1.schema.json`
 (the contract's source of truth). A result that breaks it is never sent.

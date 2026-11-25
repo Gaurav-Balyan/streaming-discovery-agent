@@ -7,9 +7,13 @@ PROVENANCE (requirements B1/B3)
     task, recorded by RunHooks.on_tool_end. The model's final text is never parsed: it becomes the
     separate `answer` artifact, display text that Agent A must not trust for ids.
 
+SKILLS (Phase 3)
+    skills.registry().route(question) picks the skill(s) by code. Only the selected skills' instructions
+    are loaded (progressive disclosure), and only their tools are offered: the catalog-mcp tool filter is
+    the union of the selected skills' `tools`. A tool outside it is refused by the SDK (MODEL_BEHAVIOR).
+
 LIMITS
-    * Tools: only search_title and search_youtube from Agent B's own catalog-mcp (static allow-list).
-    * DISCOVER_MAX_TURNS model turns (4, as Agent A's Catalog agent).
+    * Turns: the largest `max_turns` among the selected skills.
     * DISCOVER_TIMEOUT seconds for the whole operation, below Agent A's proposed 45 s.
     * If the turn limit is hit, what the searches found so far is still returned, with a code-written
       answer saying the search did not finish.
@@ -30,26 +34,35 @@ from agents import Agent, ModelSettings, RunHooks, Runner
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 from agents.mcp import MCPServerStdio, create_static_tool_filter
 
-from discovery_agent import config, runtime
+from discovery_agent import config, runtime, skills, tracing
 from discovery_agent.contract import Request, envelope, error
 from discovery_agent.operations import MAX_MATCHES, MAX_VIDEOS, _source, clean_matches, clean_videos
 
 log = logging.getLogger("discovery_agent.discover")
 
-DISCOVER_MAX_TURNS = 4
 DISCOVER_TIMEOUT = 40
 MAX_ANSWER_CHARS = 2000
-CATALOG_TOOLS = ["search_title", "search_youtube"]
 
-INSTRUCTIONS = (
+# What every discovery run is told, whatever skills are selected. Tool-specific guidance is in the skills.
+BASE_INSTRUCTIONS = (
     runtime.INSTRUCTIONS + " "
-    "To find where a movie or series streams, call search_title (add a year only if the question gives one). "
-    "For a song, music video or anything wanted on YouTube, call search_youtube (song + artist works best). "
-    "You may search more than once, for example for several titles the question names. "
-    "Then answer in one to three plain sentences: what was found and on which service, or that nothing was "
-    "found, or that the search failed. Never name a title, year or id that a search did not return. "
-    "If a tool returns an error, say the search failed; never say 'not found' for an error."
+    "Use only the tools you are given; you may call them more than once, e.g. for several titles. "
+    "Then answer in one to three plain sentences: what was found and where, or that nothing was found, or "
+    "that a search failed. Never name a title, year or id that a search did not return. If a tool returns "
+    "an error, say the search failed; never say 'not found' for an error. If the question needs a search "
+    "you have no tool for, say exactly: 'I cannot search that: the tool is not available'."
 )
+
+
+def plan(question: str) -> dict:
+    """The skills for this question and everything derived from them (all by code)."""
+    reg = skills.registry()
+    names, reason = reg.route(question)
+    metas = [reg.get(n) for n in names]
+    tools = list(dict.fromkeys(t for m in metas for t in m.tools))
+    instructions = BASE_INSTRUCTIONS + " " + " ".join(reg.instructions(n) for n in names)
+    return {"skills": names, "reason": reason, "tools": tools, "max_turns": max(m.max_turns for m in metas),
+            "instructions": instructions}
 
 
 class ToolRecorder(RunHooks):
@@ -63,7 +76,7 @@ class ToolRecorder(RunHooks):
     async def on_tool_end(self, context, agent, tool, result) -> None:
         self.calls += 1
         name = getattr(tool, "name", "")
-        if name not in CATALOG_TOOLS:
+        if name not in skills.CATALOG_TOOLS:
             return
         data = _tool_json(result)
         if not isinstance(data, dict):
@@ -108,12 +121,12 @@ def _unique_videos(videos: list[dict]) -> list[dict]:
     return out[:MAX_VIDEOS]
 
 
-def catalog_server() -> MCPServerStdio:
+def catalog_server(tools: list[str]) -> MCPServerStdio:
     cmd = config.CATALOG_MCP_COMMAND
     return MCPServerStdio(
         params={"command": cmd[0], "args": list(cmd[1:]), "cwd": str(config.BASE_DIR), "env": dict(os.environ)},
         name="catalog", cache_tools_list=True, client_session_timeout_seconds=config.CATALOG_CALL_TIMEOUT,
-        tool_filter=create_static_tool_filter(allowed_tool_names=CATALOG_TOOLS))
+        tool_filter=create_static_tool_filter(allowed_tool_names=tools))
 
 
 def _failure(req: Request, outcome: str, code: str, message: str) -> tuple[dict, None]:
@@ -125,16 +138,23 @@ async def discover(req: Request) -> tuple[dict, str | None]:
     missing = config.missing_for_model()
     if missing:
         return _failure(req, "provider_error", "MISCONFIGURED", f"the model is not configured ({', '.join(missing)})")
+    route = plan(req.params["question"])
+    log.info("request_id=%s discover route: skills=%s (%s) tools=%s max_turns=%d instructions=%d chars",
+             req.request_id, route["skills"], route["reason"], route["tools"], route["max_turns"],
+             len(route["instructions"]))
     recorder = ToolRecorder()
     finished = True
     try:
-        async with catalog_server() as server:
-            agent = Agent(name="discovery", instructions=INSTRUCTIONS, model=runtime.model(),
+        async with catalog_server(route["tools"]) as server:
+            agent = Agent(name="discovery", instructions=route["instructions"], model=runtime.model(),
                           mcp_servers=[server], model_settings=ModelSettings(temperature=0))
             try:
-                run = await asyncio.wait_for(
-                    Runner.run(agent, req.params["question"], max_turns=DISCOVER_MAX_TURNS, hooks=recorder),
-                    DISCOVER_TIMEOUT)
+                with tracing.span("discover route", {"discover.skills": route["skills"],
+                                                     "discover.route_reason": route["reason"],
+                                                     "discover.tools": route["tools"]}):
+                    run = await asyncio.wait_for(
+                        Runner.run(agent, req.params["question"], max_turns=route["max_turns"], hooks=recorder),
+                        DISCOVER_TIMEOUT)
                 answer = str(run.final_output or "")
             except MaxTurnsExceeded:
                 finished = False

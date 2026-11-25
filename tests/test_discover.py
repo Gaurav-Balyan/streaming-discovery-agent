@@ -11,7 +11,7 @@ from a2a.types import TaskState
 from a2a_helpers import data, result_of, send, status_text
 from fake_model import ScriptedModel
 
-from discovery_agent import config, contract, discover, runtime
+from discovery_agent import config, contract, discover, runtime, skills
 
 
 @pytest.fixture
@@ -47,7 +47,7 @@ def test_discover_returns_what_the_search_returned_and_the_answer_separately(mod
     assert r["data"] == {"matches": [{"title": "The Friend", "year": "2025", "ids": {"netflix": fx.THE_FRIEND_NETFLIX}}],
                          "videos": []}
     assert answer == "The Friend (2025) is on Netflix."
-    assert m.offered_tools[0] == ["search_title", "search_youtube"]        # only the allow-listed tools
+    assert m.offered_tools[0] == ["search_title"]       # a title question: the title skill's tool only
 
 
 def test_ids_in_the_model_text_are_never_results(model):
@@ -83,7 +83,7 @@ def test_an_injected_youtube_title_cannot_add_an_id(model):
 
 
 def test_the_turn_limit_still_returns_what_was_found(model):
-    model(*([[("search_title", {"title": "The Friend"})]] * discover.DISCOVER_MAX_TURNS))
+    model(*([[("search_title", {"title": "The Friend"})]] * skills.registry().get("title-discovery").max_turns))
     r, answer = ask()
     assert r["outcome"] == "ok" and r["data"]["matches"][0]["ids"] == {"netflix": fx.THE_FRIEND_NETFLIX}
     assert answer.startswith("The search did not finish")
