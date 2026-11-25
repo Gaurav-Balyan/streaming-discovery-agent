@@ -17,12 +17,12 @@ imports the other's code.
 
 Design records (contract, trust model, ADRs) live in the "Streamwise Concierge" project.
 
-## Status: Phase 2a (catalog moved here; no-model operations work)
+## Status: Phase 2 (all four operations)
 
 | Operation | Status |
 |---|---|
-| `lookup_title`, `lookup_titles`, `search_youtube` | Implemented. Agent B's code calls its own catalog-mcp (stdio subprocess, ADR-006); no model. |
-| `discover` | `NOT_IMPLEMENTED` (FAILED task) until Phase 2b |
+| `lookup_title`, `lookup_titles`, `search_youtube` | Agent B's code calls its own catalog-mcp (stdio subprocess, ADR-006); no model. |
+| `discover` | Groq model via the OpenAI Agents SDK chooses the searches (≤4 turns, 40 s). The `result` data is built by code from the tool outputs only; the model's prose is a separate, untrusted `answer` artifact. |
 
 Every request's params and every result are validated against `schemas/discovery-1.schema.json`
 (the contract's source of truth). A result that breaks it is never sent.
@@ -53,6 +53,7 @@ Try it against the real providers (in a second terminal, server running):
 python scripts/ask.py lookup_title "The Friend" 2025
 python scripts/ask.py lookup_titles "Inception" "Dune" "zzzxqq"
 python scripts/ask.py search_youtube "tum hi ho arijit singh"
+python scripts/ask.py discover "Is Game Changer from 2025 on Prime, and find tum hi ho on YouTube"
 ```
 
 ## Test

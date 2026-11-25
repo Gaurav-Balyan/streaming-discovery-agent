@@ -5,6 +5,7 @@ A manual check with the real providers (RapidAPI, YouTube); the tests never touc
     python scripts/ask.py lookup_title "The Friend" 2025
     python scripts/ask.py lookup_titles "Inception" "Dune" "zzzxqq"
     python scripts/ask.py search_youtube "tum hi ho arijit singh"
+    python scripts/ask.py discover "Is Game Changer from 2025 on Prime, and find tum hi ho on YouTube"
 """
 import asyncio
 import json
@@ -13,7 +14,7 @@ import uuid
 
 import httpx
 from a2a.client import A2ACardResolver, ClientConfig, create_client
-from a2a.helpers import get_data_parts, get_message_text, new_data_part
+from a2a.helpers import get_artifact_text, get_data_parts, get_message_text, new_data_part
 from a2a.types import Message, Role, SendMessageRequest, TaskState
 
 URL = "http://127.0.0.1:8010"
@@ -50,8 +51,12 @@ async def main(op: str, args: list[str]):
     if task.status.HasField("message"):
         print("status:", get_message_text(task.status.message))
     for a in task.artifacts:
-        print(f"artifact {a.name}:")
-        print(json.dumps(get_data_parts(a.parts)[0], indent=2, ensure_ascii=False))
+        values = get_data_parts(a.parts)
+        if values:
+            print(f"artifact {a.name}:")
+            print(json.dumps(values[0], indent=2, ensure_ascii=False))
+        else:
+            print(f"artifact {a.name} (text, untrusted): {get_artifact_text(a)}")
 
 
 if __name__ == "__main__":

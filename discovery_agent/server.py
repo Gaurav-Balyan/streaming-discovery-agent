@@ -11,7 +11,7 @@ Task outcomes (contract §4):
     envelope or params invalid        -> task COMPLETED, result outcome "invalid_input"
     lookup_title / lookup_titles /
     search_youtube (Phase 2, no model)-> task COMPLETED, result outcome ok | rate_limited | provider_error
-    discover                          -> task FAILED     (NOT_IMPLEMENTED until Phase 2b)
+    discover (Phase 2b, Groq model)   -> task COMPLETED, result + untrusted `answer` text artifact
     a result that breaks the schema   -> task FAILED     (INTERNAL_ERROR: never sent)
     unexpected crash                  -> task FAILED     (INTERNAL_ERROR; no internals in the message)
 
@@ -19,7 +19,8 @@ Run: python -m discovery_agent      (127.0.0.1:DISCOVERY_PORT, default 8010)
 """
 import logging
 
-from a2a.helpers import get_data_parts, new_data_part, new_task_from_user_message, new_text_message
+from a2a.helpers import (get_data_parts, new_data_part, new_task_from_user_message, new_text_message,
+                         new_text_part)
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -31,7 +32,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from discovery_agent import config, operations
+from discovery_agent import config, discover, operations
 from discovery_agent.contract import (CONTRACT, OPERATIONS, ContractError, envelope, error, parse_request,
                                       validate_result)
 
@@ -85,26 +86,24 @@ class DiscoveryExecutor(AgentExecutor):
                                         message=new_text_message("INTERNAL_ERROR: the request could not be processed"))
             return
 
-        handler = operations.HANDLERS.get(request.operation)
-        if handler is None:
-            log.info("request_id=%s operation=%s: not implemented yet", request.request_id, request.operation)
-            await updater.update_status(
-                state=TaskState.TASK_STATE_FAILED,
-                message=new_text_message(f"NOT_IMPLEMENTED: {request.operation} arrives in Phase 2b"))
-            return
+        answer = None
         try:
-            result = await handler(request)
+            if request.operation == "discover":
+                result, answer = await discover.discover(request)
+            else:
+                result = await operations.HANDLERS[request.operation](request)
         except Exception:  # noqa: BLE001
             log.exception("request_id=%s operation=%s: unexpected error", request.request_id, request.operation)
             await updater.update_status(state=TaskState.TASK_STATE_FAILED,
                                         message=new_text_message("INTERNAL_ERROR: the request could not be processed"))
             return
         log.info("request_id=%s operation=%s outcome=%s", request.request_id, request.operation, result["outcome"])
-        await self._complete(updater, result)
+        await self._complete(updater, result, answer)
 
     @staticmethod
-    async def _complete(updater: TaskUpdater, result: dict) -> None:
-        """Send the result artifact, but ONLY if it matches the schema (B2: never send a broken result)."""
+    async def _complete(updater: TaskUpdater, result: dict, answer: str | None = None) -> None:
+        """Send the result artifact, but ONLY if it matches the schema (B2: never send a broken result).
+        `answer` (discover only): the model's text, a separate artifact that Agent A treats as untrusted."""
         try:
             validate_result(result)
         except ValueError as e:
@@ -113,6 +112,8 @@ class DiscoveryExecutor(AgentExecutor):
                                         message=new_text_message("INTERNAL_ERROR: the result failed validation"))
             return
         await updater.add_artifact(name="result", parts=[new_data_part(result, media_type="application/json")])
+        if answer:
+            await updater.add_artifact(name="answer", parts=[new_text_part(text=answer, media_type="text/plain")])
         await updater.update_status(state=TaskState.TASK_STATE_COMPLETED)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
