@@ -135,7 +135,7 @@ def test_a_catalog_server_that_will_not_start_is_a_provider_error(model, catalog
     catalog_mode("crash")
     model("unused")
     r, _ = ask()
-    assert r["outcome"] == "provider_error" and r["error"]["code"] == "DISCOVER_FAILED"
+    assert r["outcome"] == "provider_error" and r["error"]["code"] == "CATALOG_UNAVAILABLE"
 
 
 def test_a_slow_discovery_times_out(model, monkeypatch):

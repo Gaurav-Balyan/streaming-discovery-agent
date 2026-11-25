@@ -9,5 +9,7 @@ mcp>=2.3,<3                    # catalog-mcp server and Agent B's stdio client (
 yt-dlp                         # YouTube search; update it when YouTube changes
 opentelemetry-api>=1.30        # spans are no-ops until Phase 7 configures an exporter
 jsonschema>=4.20               # discovery/1 schemas (schemas/*.json)
+# Phase 5: caller authentication (Keycloak tokens, checked against the issuer's JWKS)
+pyjwt[crypto]>=2.8
 # tests: python -m pytest tests -q
 pytest>=8

@@ -6,19 +6,26 @@ from a2a.client import A2ACardResolver, ClientConfig, create_client
 from a2a.helpers import get_data_parts, get_message_text, new_data_part, new_text_part
 from a2a.types import Message, Role, SendMessageRequest
 
+import tokens
+
 from discovery_agent.server import build_app
 
 URL = "http://discovery-agent.test"
+DEFAULT = object()
 
 
-def http() -> httpx.AsyncClient:
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=build_app(URL)), base_url=URL)
+def http(token=DEFAULT) -> httpx.AsyncClient:
+    """A client for the in-process app. By default it sends a valid concierge-agent token;
+    token=None sends none, any string is sent as given."""
+    token = tokens.good() if token is DEFAULT else token
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=build_app(URL)), base_url=URL, headers=headers)
 
 
-def send(*parts):
+def send(*parts, token=DEFAULT):
     """Send one message with these parts; return the final task."""
     async def go():
-        async with http() as h:
+        async with http(token) as h:
             card = await A2ACardResolver(httpx_client=h, base_url=URL).get_agent_card()
             client = await create_client(agent=card, client_config=ClientConfig(streaming=False, httpx_client=h))
             task = None

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:streamwise:mcp-tools:1",
+  "title": "Agent B approved tool configuration (config/mcp_tools.json)",
+  "type": "object",
+  "required": ["version", "servers", "tools"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "description": {"type": "string"},
+    "servers": {
+      "type": "object", "minProperties": 1,
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_-]{0,30}$"},
+      "additionalProperties": {
+        "type": "object", "required": ["handler"], "additionalProperties": false,
+        "properties": {"handler": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,40}$"}}
+      }
+    },
+    "tools": {
+      "type": "object", "minProperties": 1,
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_]{0,40}$"},
+      "additionalProperties": {
+        "type": "object",
+        "required": ["server", "description", "access", "permission", "timeout_s", "retry", "allowed", "input_schema"],
+        "additionalProperties": false,
+        "properties": {
+          "server": {"type": "string"},
+          "description": {"type": "string", "minLength": 10, "maxLength": 1000},
+          "access": {"enum": ["read", "write"]},
+          "permission": {"type": "string", "pattern": "^[a-z]+:[a-z]+$"},
+          "timeout_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 120},
+          "retry": {
+            "type": "object", "required": ["max_attempts", "retry_on"], "additionalProperties": false,
+            "properties": {
+              "max_attempts": {"type": "integer", "minimum": 1, "maximum": 3},
+              "retry_on": {"type": "array", "uniqueItems": true, "items": {"enum": ["CATALOG_UNAVAILABLE", "TOOL_TIMEOUT"]}}
+            }
+          },
+          "allowed": {
+            "type": "object", "required": ["operations", "skills"], "additionalProperties": false,
+            "properties": {
+              "operations": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+              "skills": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+            }
+          },
+          "input_schema": {
+            "type": "object", "required": ["type", "properties", "required", "additionalProperties"],
+            "properties": {"type": {"const": "object"}, "additionalProperties": {"const": false}}
+          }
+        }
+      }
+    }
+  }
+}

@@ -112,8 +112,7 @@ def test_lookup_titles_needs_at_least_one(catalog_mode):
 def test_lookup_titles_runs_at_most_four_searches_at_once(catalog_mode, monkeypatch):
     """The concurrency cap lives in Agent B, next to the RapidAPI key (ADR-004)."""
     import asyncio
-    from discovery_agent import operations
-    from discovery_agent.catalog import client
+    from discovery_agent import operations, tools
     running, peak = [0], [0]
 
     class Session:
@@ -130,7 +129,7 @@ def test_lookup_titles_runs_at_most_four_searches_at_once(catalog_mode, monkeypa
 
         async def __aexit__(self, *a):
             return False
-    monkeypatch.setattr(client, "session", lambda: Ctx())
+    monkeypatch.setitem(tools.KNOWN_HANDLERS, "catalog-mcp", lambda: Ctx())
     r = ask("lookup_titles", titles=[{"title": f"T{i}"} for i in range(12)])
     assert r["outcome"] == "ok" and peak[0] == operations.PARALLEL_SEARCHES == 4
 
@@ -178,7 +177,7 @@ def test_bad_youtube_params_are_invalid_input(catalog_mode, params):
 def test_a_result_that_breaks_the_schema_is_never_sent(catalog_mode, monkeypatch):
     from discovery_agent import operations
 
-    async def broken(req):
+    async def broken(req, *_):
         return contract.envelope(req.operation, req.request_id, "ok", {"matches": [{"title": "X", "year": None,
                                  "ids": {"hbo": "1"}}]}, source={"provider": "streaming-availability",
                                  "country": "in", "retrieved_at": "2026-11-25T00:00:00Z"})

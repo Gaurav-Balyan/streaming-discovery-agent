@@ -13,11 +13,12 @@ imports the other's code.
 | Interface | A2A 1.0 JSON-RPC (`a2a-sdk` 1.2.0), Agent Card at `/.well-known/agent-card.json` |
 | Contract | `discovery/1`: `lookup_title`, `lookup_titles`, `search_youtube` (no model), `discover` (model) |
 | Health | `/healthz` (up), `/readyz` (configuration complete) |
-| Network | **127.0.0.1 only** until Phase 5 adds caller authentication (ADR-005) |
+| Callers | Keycloak bearer token, audience `discovery-agent`, client `concierge-agent` (ADR-005); policy in `config/access.json` |
+| Network | **127.0.0.1 only** until Phase 8 adds TLS |
 
 Design records (contract, trust model, ADRs) live in the "Streamwise Concierge" project.
 
-## Status: Phase 3 (skills)
+## Status: Phase 5 (caller authentication)
 
 | Operation | Status |
 |---|---|
@@ -35,6 +36,15 @@ Design records (contract, trust model, ADRs) live in the "Streamwise Concierge" 
 skill; several → all of them in one run; no cue → all. Only the selected skills' instructions are loaded
 (the registry reads headers at startup, bodies on first use), and only their tools are offered. An
 invalid skill file stops the server from starting.
+
+### Approved tools (`config/mcp_tools.json`)
+
+Every catalog call — from a lookup operation or from the model in `discover` — goes through one
+controlled path (`discovery_agent/tools.py`): approved tool → caller allowed (operation or skill) →
+permission → arguments valid against the **configured** schema → timeout → bounded retry (read tools only).
+The model is shown the configured description and schema, never the server's. A server is named by a
+handler key mapped in code; the file cannot name a program to run. At startup the configured tools are
+checked against the running catalog-mcp; any invalid file or mismatch stops the server.
 
 Every request's params and every result are validated against `schemas/discovery-1.schema.json`
 (the contract's source of truth). A result that breaks it is never sent.
@@ -59,13 +69,15 @@ python -m discovery_agent
 # http://127.0.0.1:8010/.well-known/agent-card.json
 ```
 
-Try it against the real providers (in a second terminal, server running):
+Try it against the real providers (in a second terminal, server running; Keycloak must be up — the
+script gets a `concierge-agent` token, standing in for Agent A):
 
 ```powershell
 python scripts/ask.py lookup_title "The Friend" 2025
 python scripts/ask.py lookup_titles "Inception" "Dune" "zzzxqq"
 python scripts/ask.py search_youtube "tum hi ho arijit singh"
 python scripts/ask.py discover "Is Game Changer from 2025 on Prime, and find tum hi ho on YouTube"
+python scripts/ask.py --no-token lookup_title "The Friend"     # HTTP 401
 ```
 
 ## Test

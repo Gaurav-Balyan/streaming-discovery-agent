@@ -21,7 +21,11 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "")
 GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 
-# Until Phase 5 adds authentication (ADR-005) Agent B may listen on this PC only.
+# Phase 5 (ADR-005): callers authenticate with a Keycloak token for this audience.
+OIDC_ISSUER = os.environ.get("OIDC_ISSUER", "http://localhost:8080/realms/household")
+AUDIENCE = "discovery-agent"
+
+# Agent B listens on this PC only until Phase 8 adds TLS; tokens alone are not enough on a network.
 LOCAL_ONLY_HOSTS = {"127.0.0.1"}
 HOST = os.environ.get("DISCOVERY_HOST", "127.0.0.1")
 PORT = int(os.environ.get("DISCOVERY_PORT", "8010"))   # Agent A uses 8001-8004

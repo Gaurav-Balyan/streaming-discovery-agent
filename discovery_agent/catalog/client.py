@@ -37,6 +37,11 @@ class CatalogSession:
     def __init__(self, client: Client):
         self._client = client
 
+    async def list_tools(self) -> dict[str, dict]:
+        """tool name -> its input schema, as the running server publishes them (for the startup check)."""
+        listed = await self._client.list_tools()
+        return {t.name: dict(t.input_schema or {}) for t in listed.tools}
+
     async def call(self, tool: str, args: dict) -> dict:
         try:
             result = await self._client.call_tool(tool, args, read_timeout_seconds=config.CATALOG_CALL_TIMEOUT)

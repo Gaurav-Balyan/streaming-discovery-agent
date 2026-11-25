@@ -1,7 +1,8 @@
 """
 The no-model discovery/1 operations (ADR-004): lookup_title, lookup_titles, search_youtube.
 
-Agent B's CODE calls its catalog-mcp and builds the result. No model sees or writes any of it, so every
+Agent B's CODE calls its catalog-mcp through the controlled executor (tools.py: approved tool, caller
+allow-list, permission, configured schema, timeout) and builds the result. No model sees or writes any of it, so every
 id in a result came from a real catalog tool result in THIS task (provenance requirement B1/B3).
 
 Outcomes (contract §4): ok (empty = not found), invalid_input, rate_limited, provider_error.
@@ -13,7 +14,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from discovery_agent import config
+from discovery_agent import config, tools
 from discovery_agent.catalog import client as catalog
 from discovery_agent.contract import Request, envelope, error
 
@@ -95,43 +96,51 @@ def _title_args(p: dict) -> dict:
     return {"title": p["title"], **({"year": p["year"]} if p.get("year") else {})}
 
 
-async def lookup_title(req: Request) -> dict:
+def _executor() -> tools.ToolExecutor:
+    return tools.ToolExecutor(tools.tool_config())
+
+
+async def lookup_title(req: Request, permissions=tools.DEFAULT_PERMISSIONS) -> dict:
     try:
-        async with catalog.session() as s:
-            data = await s.call("search_title", _title_args(req.params))
+        async with _executor() as ex:
+            data = await ex.call("search_title", _title_args(req.params), tools.Caller("operation", req.operation, frozenset(permissions)))
     except catalog.CatalogError as e:
         return _failure(req, e)
     return envelope(req.operation, req.request_id, "ok", {"matches": clean_matches(data.get("matches"), req.request_id)},
                     source=_source("streaming-availability"))
 
 
-async def lookup_titles(req: Request) -> dict:
+async def lookup_titles(req: Request, permissions=tools.DEFAULT_PERMISSIONS) -> dict:
     gate = asyncio.Semaphore(PARALLEL_SEARCHES)
 
-    async def one(s, t: dict) -> dict:
+    caller = tools.Caller("operation", req.operation, frozenset(permissions))
+
+    async def one(ex, t: dict) -> dict:
         item = {"title": t["title"], "year": t.get("year") or None}
         async with gate:
             try:
-                data = await s.call("search_title", _title_args(t))
+                data = await ex.call("search_title", _title_args(t), caller)
             except catalog.CatalogError as e:
                 return {**item, "status": "error", "matches": [], "error": error(e.code, e.message)}
         matches = clean_matches(data.get("matches"), req.request_id)
         return {**item, "status": "found" if matches else "not_found", "matches": matches, "error": None}
 
     try:
-        async with catalog.session() as s:
-            items = await asyncio.gather(*(one(s, t) for t in req.params["titles"]))
-    except catalog.CatalogError as e:          # the session itself could not start
+        async with _executor() as ex:
+            await ex.ensure(["search_title"])      # a server that cannot start fails the whole batch
+            items = await asyncio.gather(*(one(ex, t) for t in req.params["titles"]))
+    except catalog.CatalogError as e:
         return _failure(req, e)
     return envelope(req.operation, req.request_id, "ok", {"items": list(items)},
                     source=_source("streaming-availability"))
 
 
-async def search_youtube(req: Request) -> dict:
+async def search_youtube(req: Request, permissions=tools.DEFAULT_PERMISSIONS) -> dict:
     limit = int(req.params.get("limit") or 3)       # A2A Structs carry numbers as floats: 3.0 -> 3
     try:
-        async with catalog.session() as s:
-            data = await s.call("search_youtube", {"query": req.params["query"], "limit": limit})
+        async with _executor() as ex:
+            data = await ex.call("search_youtube", {"query": req.params["query"], "limit": limit},
+                                 tools.Caller("operation", req.operation, frozenset(permissions)))
     except catalog.CatalogError as e:
         return _failure(req, e)
     return envelope(req.operation, req.request_id, "ok",

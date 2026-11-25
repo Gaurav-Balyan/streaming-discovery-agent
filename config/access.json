@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0",
+  "description": "Who may call Agent B, and what each caller may do (ADR-005, trust model §4). A token must be issued by the configured issuer for audience discovery-agent, carry the required scope, and come from a client (azp) listed here.",
+  "required_scope": "discovery-agent",
+  "callers": {
+    "concierge-agent": {
+      "operations": ["lookup_title", "lookup_titles", "search_youtube", "discover"],
+      "permissions": ["catalog:read"],
+      "rate_limit": {"requests_per_minute": 120, "discover_per_minute": 20}
+    }
+  }
+}

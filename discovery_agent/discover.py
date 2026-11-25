@@ -2,10 +2,15 @@
 The `discover` operation (ADR-004): Agent B's MODEL (Groq, via the OpenAI Agents SDK) chooses which
 catalog searches to run for a free-text question. This is what makes Agent B an agent, not an API.
 
+TOOLS (Phase 4, ADR-008)
+    The model is given SDK FunctionTools built from config/mcp_tools.json: the approved name, the
+    CONFIGURED description and input schema. Each call goes through tools.ToolExecutor (caller = the
+    skill that owns the tool), the same controlled path as the no-model operations.
+
 PROVENANCE (requirements B1/B3)
-    The structured result is built by CODE from the outputs of the catalog tools that really ran in this
-    task, recorded by RunHooks.on_tool_end. The model's final text is never parsed: it becomes the
-    separate `answer` artifact, display text that Agent A must not trust for ids.
+    The structured result is built by CODE from what the executor really returned, recorded inside the
+    tool wrapper. The model's final text is never parsed: it becomes the separate `answer` artifact,
+    display text that Agent A must not trust for ids.
 
 SKILLS (Phase 3)
     skills.registry().route(question) picks the skill(s) by code. Only the selected skills' instructions
@@ -22,7 +27,7 @@ OUTCOMES
     ok                          searches ran (possibly none found anything)
     rate_limited                Groq rate limit (MODEL_RATE_LIMITED)
     provider_error              model not configured / unavailable / misbehaving (unknown tool),
-                                catalog-mcp would not start, timeout
+                                catalog-mcp would not start (CATALOG_UNAVAILABLE), timeout
 """
 import asyncio
 import os
@@ -30,11 +35,11 @@ import json
 import logging
 
 import openai
-from agents import Agent, ModelSettings, RunHooks, Runner
+from agents import Agent, FunctionTool, ModelSettings, Runner
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
-from agents.mcp import MCPServerStdio, create_static_tool_filter
 
-from discovery_agent import config, runtime, skills, tracing
+from discovery_agent import config, runtime, skills, tools, tracing
+from discovery_agent.catalog.client import CatalogError
 from discovery_agent.contract import Request, envelope, error
 from discovery_agent.operations import MAX_MATCHES, MAX_VIDEOS, _source, clean_matches, clean_videos
 
@@ -65,7 +70,7 @@ def plan(question: str) -> dict:
             "instructions": instructions}
 
 
-class ToolRecorder(RunHooks):
+class ToolRecorder:
     """Writes down, by code, what each catalog tool returned. Model text never reaches here."""
 
     def __init__(self):
@@ -73,33 +78,37 @@ class ToolRecorder(RunHooks):
         self.video_results: list[dict] = []
         self.calls = 0
 
-    async def on_tool_end(self, context, agent, tool, result) -> None:
-        self.calls += 1
-        name = getattr(tool, "name", "")
-        if name not in skills.CATALOG_TOOLS:
-            return
-        data = _tool_json(result)
-        if not isinstance(data, dict):
-            return
-        if name == "search_title":
+    def record(self, tool: str, data: dict) -> None:
+        if tool == "search_title":
             self.title_results.extend(m for m in data.get("matches") or [] if isinstance(m, dict))
-        else:
+        elif tool == "search_youtube":
             self.video_results.extend(v for v in data.get("videos") or [] if isinstance(v, dict))
 
 
-def _tool_json(result):
-    """The JSON object a catalog tool returned. The SDK hands MCP results over as text, a content block
-    ({"type": "text", "text": "..."}) or a list of blocks. Anything else, or an error message, is no data."""
-    if isinstance(result, dict):
-        result = result.get("text") if result.get("type") == "text" else None
-    elif isinstance(result, list):
-        result = "".join(b.get("text", "") for b in result if isinstance(b, dict) and b.get("type") == "text")
-    if not isinstance(result, str):
-        return None
-    try:
-        return json.loads(result)
-    except ValueError:
-        return None
+def function_tools(route: dict, executor: tools.ToolExecutor, recorder: ToolRecorder,
+                   permissions=tools.DEFAULT_PERMISSIONS) -> list[FunctionTool]:
+    """One SDK tool per approved tool of the selected skills. What the model sees comes from the config."""
+    out = []
+    for tool in route["tools"]:
+        spec = executor.cfg.tools[tool]
+        caller = tools.Caller("skill", next(s for s in route["skills"] if s in spec.skills), frozenset(permissions))
+
+        async def invoke(ctx, args_json: str, tool=tool, caller=caller) -> str:
+            recorder.calls += 1
+            try:
+                args = json.loads(args_json or "{}")
+            except ValueError:
+                return json.dumps({"error": {"code": "INVALID_INPUT", "message": "arguments are not valid JSON"}})
+            try:
+                data = await executor.call(tool, args, caller)
+            except CatalogError as e:
+                return json.dumps({"error": {"code": e.code, "message": e.message}})
+            recorder.record(tool, data)
+            return json.dumps(data, ensure_ascii=False)
+
+        out.append(FunctionTool(name=tool, description=spec.description, params_json_schema=spec.input_schema,
+                                on_invoke_tool=invoke, strict_json_schema=False))
+    return out
 
 
 def _unique_matches(matches: list[dict]) -> list[dict]:
@@ -121,19 +130,11 @@ def _unique_videos(videos: list[dict]) -> list[dict]:
     return out[:MAX_VIDEOS]
 
 
-def catalog_server(tools: list[str]) -> MCPServerStdio:
-    cmd = config.CATALOG_MCP_COMMAND
-    return MCPServerStdio(
-        params={"command": cmd[0], "args": list(cmd[1:]), "cwd": str(config.BASE_DIR), "env": dict(os.environ)},
-        name="catalog", cache_tools_list=True, client_session_timeout_seconds=config.CATALOG_CALL_TIMEOUT,
-        tool_filter=create_static_tool_filter(allowed_tool_names=tools))
-
-
 def _failure(req: Request, outcome: str, code: str, message: str) -> tuple[dict, None]:
     return envelope(req.operation, req.request_id, outcome, error=error(code, message)), None
 
 
-async def discover(req: Request) -> tuple[dict, str | None]:
+async def discover(req: Request, permissions=tools.DEFAULT_PERMISSIONS) -> tuple[dict, str | None]:
     """Returns (result envelope, answer text or None)."""
     missing = config.missing_for_model()
     if missing:
@@ -145,21 +146,25 @@ async def discover(req: Request) -> tuple[dict, str | None]:
     recorder = ToolRecorder()
     finished = True
     try:
-        async with catalog_server(route["tools"]) as server:
+        async with tools.ToolExecutor(tools.tool_config()) as executor:
+            await executor.ensure(route["tools"])          # catalog-mcp cannot start -> provider_error
             agent = Agent(name="discovery", instructions=route["instructions"], model=runtime.model(),
-                          mcp_servers=[server], model_settings=ModelSettings(temperature=0))
+                          tools=function_tools(route, executor, recorder, permissions),
+                          model_settings=ModelSettings(temperature=0))
             try:
                 with tracing.span("discover route", {"discover.skills": route["skills"],
                                                      "discover.route_reason": route["reason"],
                                                      "discover.tools": route["tools"]}):
                     run = await asyncio.wait_for(
-                        Runner.run(agent, req.params["question"], max_turns=route["max_turns"], hooks=recorder),
+                        Runner.run(agent, req.params["question"], max_turns=route["max_turns"]),
                         DISCOVER_TIMEOUT)
                 answer = str(run.final_output or "")
             except MaxTurnsExceeded:
                 finished = False
                 answer = ("The search did not finish within its turn limit. "
                           "These are the results the searches returned so far.")
+    except CatalogError as e:
+        return _failure(req, "provider_error", e.code, e.message)
     except asyncio.TimeoutError:
         return _failure(req, "provider_error", "DISCOVER_TIMEOUT", f"discovery took longer than {DISCOVER_TIMEOUT}s")
     except ModelBehaviorError:

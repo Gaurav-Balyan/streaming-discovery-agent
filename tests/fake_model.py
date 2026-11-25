@@ -16,11 +16,16 @@ class ScriptedModel(Model):
     def __init__(self, steps):
         self.steps = list(steps)
         self.offered_tools: list[list[str]] = []
+        self.descriptions: dict[str, str] = {}
+        self.schemas: dict[str, dict] = {}
         self.inputs: list = []
 
     async def get_response(self, system_instructions, input, model_settings, tools, output_schema, handoffs,
                            tracing, *, previous_response_id=None, conversation_id=None, prompt=None):
         self.offered_tools.append(sorted(t.name for t in tools))
+        for t in tools:
+            self.descriptions[t.name] = getattr(t, "description", "")
+            self.schemas[t.name] = getattr(t, "params_json_schema", {})
         self.inputs.append(input)
         if not self.steps:
             raise AssertionError("the scripted model ran out of steps")
