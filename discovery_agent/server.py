@@ -8,8 +8,11 @@ Agent B's A2A server: Agent Card, JSON-RPC endpoint, /healthz and /readyz.
 
 Task outcomes (contract §4):
     contract not discovery/1          -> task REJECTED   (UNSUPPORTED_CONTRACT)
-    envelope invalid                  -> task COMPLETED, result outcome "invalid_input"
-    valid, not implemented (Phase 1)  -> task FAILED     (NOT_IMPLEMENTED; Agent A says "unavailable")
+    envelope or params invalid        -> task COMPLETED, result outcome "invalid_input"
+    lookup_title / lookup_titles /
+    search_youtube (Phase 2, no model)-> task COMPLETED, result outcome ok | rate_limited | provider_error
+    discover                          -> task FAILED     (NOT_IMPLEMENTED until Phase 2b)
+    a result that breaks the schema   -> task FAILED     (INTERNAL_ERROR: never sent)
     unexpected crash                  -> task FAILED     (INTERNAL_ERROR; no internals in the message)
 
 Run: python -m discovery_agent      (127.0.0.1:DISCOVERY_PORT, default 8010)
@@ -28,8 +31,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from discovery_agent import config
-from discovery_agent.contract import CONTRACT, OPERATIONS, ContractError, envelope, error, parse_request
+from discovery_agent import config, operations
+from discovery_agent.contract import (CONTRACT, OPERATIONS, ContractError, envelope, error, parse_request,
+                                      validate_result)
 
 log = logging.getLogger("discovery_agent")
 
@@ -73,8 +77,7 @@ class DiscoveryExecutor(AgentExecutor):
                 return
             result = envelope(e.request.get("operation"), e.request.get("request_id"), "invalid_input",
                               error=error(e.code, e.message))
-            await updater.add_artifact(name="result", parts=[new_data_part(result, media_type="application/json")])
-            await updater.update_status(state=TaskState.TASK_STATE_COMPLETED)
+            await self._complete(updater, result)
             return
         except Exception:  # noqa: BLE001   never a hang, never internals in the reply
             log.exception("unexpected error while reading the request")
@@ -82,10 +85,35 @@ class DiscoveryExecutor(AgentExecutor):
                                         message=new_text_message("INTERNAL_ERROR: the request could not be processed"))
             return
 
-        log.info("request_id=%s operation=%s: not implemented yet", request.request_id, request.operation)
-        await updater.update_status(
-            state=TaskState.TASK_STATE_FAILED,
-            message=new_text_message(f"NOT_IMPLEMENTED: {request.operation} arrives in Phase 2"))
+        handler = operations.HANDLERS.get(request.operation)
+        if handler is None:
+            log.info("request_id=%s operation=%s: not implemented yet", request.request_id, request.operation)
+            await updater.update_status(
+                state=TaskState.TASK_STATE_FAILED,
+                message=new_text_message(f"NOT_IMPLEMENTED: {request.operation} arrives in Phase 2b"))
+            return
+        try:
+            result = await handler(request)
+        except Exception:  # noqa: BLE001
+            log.exception("request_id=%s operation=%s: unexpected error", request.request_id, request.operation)
+            await updater.update_status(state=TaskState.TASK_STATE_FAILED,
+                                        message=new_text_message("INTERNAL_ERROR: the request could not be processed"))
+            return
+        log.info("request_id=%s operation=%s outcome=%s", request.request_id, request.operation, result["outcome"])
+        await self._complete(updater, result)
+
+    @staticmethod
+    async def _complete(updater: TaskUpdater, result: dict) -> None:
+        """Send the result artifact, but ONLY if it matches the schema (B2: never send a broken result)."""
+        try:
+            validate_result(result)
+        except ValueError as e:
+            log.error("request_id=%s: %s", result.get("request_id"), e)
+            await updater.update_status(state=TaskState.TASK_STATE_FAILED,
+                                        message=new_text_message("INTERNAL_ERROR: the result failed validation"))
+            return
+        await updater.add_artifact(name="result", parts=[new_data_part(result, media_type="application/json")])
+        await updater.update_status(state=TaskState.TASK_STATE_COMPLETED)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         raise NotImplementedError("cancel is not supported")
@@ -97,7 +125,7 @@ async def healthz(_: Request) -> JSONResponse:
 
 
 async def readyz(_: Request) -> JSONResponse:
-    missing = config.missing_for_model()
+    missing = config.missing_for_model() + config.missing_for_catalog()
     body = {"ready": not missing, "missing": missing}
     return JSONResponse(body, status_code=200 if not missing else 503)
 

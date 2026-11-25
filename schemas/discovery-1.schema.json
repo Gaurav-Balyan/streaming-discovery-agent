@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:streamwise:discovery:1",
+  "title": "discovery/1 — Agent A <-> Agent B A2A contract",
+  "description": "Source of truth for the contract (phase0-a2a-contract.md). Agent B validates params on input and every result before sending; Agent A validates every result on receipt. Unknown fields are allowed and ignored (minor-version compatibility).",
+  "$defs": {
+    "year": {"type": "string", "pattern": "^[0-9]{4}$"},
+    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+
+    "params_lookup_title": {
+      "type": "object",
+      "required": ["title"],
+      "properties": {"title": {"$ref": "#/$defs/title"}, "year": {"$ref": "#/$defs/year"}}
+    },
+    "params_lookup_titles": {
+      "type": "object",
+      "required": ["titles"],
+      "properties": {"titles": {"type": "array", "minItems": 1, "maxItems": 12,
+                                "items": {"$ref": "#/$defs/params_lookup_title"}}}
+    },
+    "params_search_youtube": {
+      "type": "object",
+      "required": ["query"],
+      "properties": {"query": {"type": "string", "minLength": 2, "maxLength": 200},
+                     "limit": {"type": "integer", "minimum": 1, "maximum": 5}}
+    },
+    "params_discover": {
+      "type": "object",
+      "required": ["question"],
+      "properties": {"question": {"type": "string", "minLength": 1, "maxLength": 500}}
+    },
+
+    "match": {
+      "type": "object",
+      "required": ["title", "year", "ids"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "year": {"oneOf": [{"$ref": "#/$defs/year"}, {"type": "null"}]},
+        "ids": {
+          "type": "object", "minProperties": 1,
+          "propertyNames": {"enum": ["netflix", "prime"]},
+          "properties": {
+            "netflix": {"type": "string", "pattern": "^[0-9]{1,12}$"},
+            "prime": {"type": "string", "pattern": "^amzn1\\.dv\\.gti\\.[0-9a-fA-F-]{8,64}$"}
+          }
+        }
+      }
+    },
+    "matches": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/match"}},
+    "video": {
+      "type": "object",
+      "required": ["video_id", "title", "channel", "duration_seconds"],
+      "properties": {
+        "video_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{11}$"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "channel": {"type": ["string", "null"], "maxLength": 200},
+        "duration_seconds": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "retry_after_s"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[A-Za-z_]{1,40}$"},
+        "message": {"type": "string", "maxLength": 300},
+        "retry_after_s": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "item": {
+      "type": "object",
+      "required": ["title", "year", "status", "matches", "error"],
+      "properties": {
+        "title": {"$ref": "#/$defs/title"},
+        "year": {"oneOf": [{"$ref": "#/$defs/year"}, {"type": "null"}]},
+        "status": {"enum": ["found", "not_found", "error"]},
+        "matches": {"$ref": "#/$defs/matches"},
+        "error": {"oneOf": [{"$ref": "#/$defs/error"}, {"type": "null"}]}
+      }
+    },
+    "data_lookup_title": {"type": "object", "required": ["matches"], "properties": {"matches": {"$ref": "#/$defs/matches"}}},
+    "data_lookup_titles": {"type": "object", "required": ["items"],
+                           "properties": {"items": {"type": "array", "maxItems": 12, "items": {"$ref": "#/$defs/item"}}}},
+    "data_search_youtube": {"type": "object", "required": ["videos"],
+                            "properties": {"videos": {"type": "array", "maxItems": 5, "items": {"$ref": "#/$defs/video"}}}},
+    "data_discover": {"type": "object", "required": ["matches", "videos"],
+                      "properties": {"matches": {"$ref": "#/$defs/matches"},
+                                     "videos": {"type": "array", "maxItems": 5, "items": {"$ref": "#/$defs/video"}}}},
+    "source": {
+      "type": "object",
+      "required": ["provider", "country", "retrieved_at"],
+      "properties": {
+        "provider": {"enum": ["streaming-availability", "youtube", "mixed"]},
+        "country": {"type": "string", "pattern": "^[a-z]{2}$"},
+        "retrieved_at": {"type": "string", "format": "date-time"},
+        "cache": {"enum": ["fresh", "cached", "stale"]}
+      }
+    },
+
+    "result": {
+      "type": "object",
+      "required": ["contract", "operation", "request_id", "outcome", "error", "data"],
+      "properties": {
+        "contract": {"const": "discovery/1"},
+        "operation": {"type": ["string", "null"]},
+        "request_id": {"type": ["string", "null"], "maxLength": 100},
+        "outcome": {"enum": ["ok", "invalid_input", "rate_limited", "provider_error"]},
+        "error": {"oneOf": [{"$ref": "#/$defs/error"}, {"type": "null"}]},
+        "data": {"type": ["object", "null"]},
+        "source": {"$ref": "#/$defs/source"}
+      },
+      "allOf": [
+        {"if": {"properties": {"outcome": {"const": "ok"}}},
+         "then": {"properties": {"error": {"type": "null"}, "data": {"type": "object"}}, "required": ["source"]},
+         "else": {"properties": {"error": {"$ref": "#/$defs/error"}, "data": {"type": "null"}}}},
+        {"if": {"properties": {"outcome": {"const": "ok"}, "operation": {"const": "lookup_title"}}, "required": ["outcome", "operation"]},
+         "then": {"properties": {"data": {"$ref": "#/$defs/data_lookup_title"}}}},
+        {"if": {"properties": {"outcome": {"const": "ok"}, "operation": {"const": "lookup_titles"}}, "required": ["outcome", "operation"]},
+         "then": {"properties": {"data": {"$ref": "#/$defs/data_lookup_titles"}}}},
+        {"if": {"properties": {"outcome": {"const": "ok"}, "operation": {"const": "search_youtube"}}, "required": ["outcome", "operation"]},
+         "then": {"properties": {"data": {"$ref": "#/$defs/data_search_youtube"}}}},
+        {"if": {"properties": {"outcome": {"const": "ok"}, "operation": {"const": "discover"}}, "required": ["outcome", "operation"]},
+         "then": {"properties": {"data": {"$ref": "#/$defs/data_discover"}}}}
+      ]
+    }
+  }
+}

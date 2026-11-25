@@ -4,5 +4,10 @@ a2a-sdk[http-server]==1.2.0    # same pin as Agent A: both ends of the A2A link 
 uvicorn>=0.30
 httpx>=0.28
 python-dotenv>=1.0
+# Phase 2: the catalog capability (moved from Agent A)
+mcp>=2.3,<3                    # catalog-mcp server and Agent B's stdio client (same major as Agent A)
+yt-dlp                         # YouTube search; update it when YouTube changes
+opentelemetry-api>=1.30        # spans are no-ops until Phase 7 configures an exporter
+jsonschema>=4.20               # discovery/1 schemas (schemas/*.json)
 # tests: python -m pytest tests -q
 pytest>=8

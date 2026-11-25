@@ -42,8 +42,10 @@ def test_readyz_names_missing_settings_but_never_values(monkeypatch):
     from discovery_agent import config
     monkeypatch.setattr(config, "GROQ_API_KEY", "")
     monkeypatch.setattr(config, "GROQ_MODEL", "some-model")
+    monkeypatch.delenv("RAPIDAPI_KEY", raising=False)
     r = get("/readyz")
-    assert r.status_code == 503 and r.json() == {"ready": False, "missing": ["GROQ_API_KEY"]}
+    assert r.status_code == 503 and r.json() == {"ready": False, "missing": ["GROQ_API_KEY", "RAPIDAPI_KEY"]}
     monkeypatch.setattr(config, "GROQ_API_KEY", "gsk_secret_value")
+    monkeypatch.setenv("RAPIDAPI_KEY", "rapid_secret_value")
     r = get("/readyz")
-    assert r.status_code == 200 and "gsk_secret_value" not in r.text
+    assert r.status_code == 200 and "secret_value" not in r.text
