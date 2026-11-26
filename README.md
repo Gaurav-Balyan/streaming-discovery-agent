@@ -50,7 +50,8 @@ Every request's params and every result are validated against `schemas/discovery
 (the contract's source of truth). A result that breaks it is never sent.
 
 The catalog (RapidAPI lookup with cache, retries, circuit breaker and stale fallback; YouTube via yt-dlp)
-moved here from Agent A's `servers/catalog/`. Agent A keeps its own copy until Phase 6.
+moved here from Agent A's `servers/catalog/` (Phase 2). Since Phase 6 it is the only catalog: Agent A
+has no copy, and reaches this agent only through its URL and a Keycloak token. Each repo starts itself.
 
 ## Setup (Windows, Conda)
 
@@ -64,7 +65,8 @@ copy .env.example .env      # then fill in RAPIDAPI_KEY, GROQ_API_KEY (separate 
 ## Run
 
 ```powershell
-python -m discovery_agent
+.\start-discovery-agent.ps1        # checks the token issuer and the port, then runs the line below
+python -m discovery_agent          # the same, without the checks
 # http://127.0.0.1:8010/healthz
 # http://127.0.0.1:8010/.well-known/agent-card.json
 ```
